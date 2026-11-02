@@ -2,7 +2,7 @@
 __pycache__/
 *.pyc
 .env
-data/uploads/
-data/runtime/
 *.db
 .pytest_cache/
+data/runtime/
+data/uploads/

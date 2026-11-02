@@ -1,0 +1,11 @@
+[
+  {"question": "What is the return period for products?", "role": "customer", "region": "EU", "expect_doc": "RET-POL", "expect_contains": "30 days"},
+  {"question": "What is the return policy for products?", "role": "customer", "region": "IN", "expect_doc": "RET-POL-IN", "expect_contains": "10 days"},
+  {"question": "How long is the laptop warranty?", "role": "customer", "region": "EU", "expect_doc": "FAQ-WARRANTY", "expect_contains": "12 month"},
+  {"question": "My router shows error E1002, what does it mean?", "role": "customer", "region": "EU", "expect_doc": "TS-ROUTER", "expect_contains": "firmware"},
+  {"question": "How long does standard shipping take?", "role": "customer", "region": "EU", "expect_doc": "FAQ-SHIP", "expect_contains": "5 to 7 business days"},
+  {"question": "What was the return policy on 2026-03-10?", "role": "customer", "region": "EU", "expect_doc": "RET-POL", "expect_contains": "14 days"},
+  {"question": "What is the refund approval limit for agents?", "role": "agent", "region": "EU", "expect_doc": "INT-REFUND", "expect_contains": "5000 rupees"},
+  {"question": "What is the fraud score freezing threshold?", "role": "customer", "region": "EU", "expect_refusal": true},
+  {"question": "What is the maximum speed of the moon rover?", "role": "customer", "region": "EU", "expect_refusal": true}
+]

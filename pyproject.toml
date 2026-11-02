@@ -3,24 +3,21 @@ name = "a-real-time-gen-ai-customer-service-bot"
 version = "0.1.0"
 description = "AI customer-support platform: sentiment/escalation, ticketing/SLA, RAG, multimodal and multilingual sessions"
 readme = "README.md"
-authors = [
-    { name = "Tribhuwan Pandey", email = "tribhuwanpandeyrmr@gmail.com" }
-]
 requires-python = ">=3.12"
 dependencies = [
-    "fastapi>=0.141.1",
-    "openai>=3.8.0",
-    "pydantic>=2.13.5",
-    "python-dotenv>=1.2.3",
-    "pyyaml>=6.0.3",
-    "uvicorn>=0.52.4",
+    "fastapi>=0.100",
+    "openai>=1.0",
+    "pillow>=13.0.0",
+    "pydantic>=2.0",
+    "pypdf>=6.21.1",
+    "pytesseract>=0.3.13",
+    "python-dotenv>=1.0",
+    "pyyaml>=6.0",
+    "uvicorn>=0.20",
 ]
-[tool.pytest.ini_options]
-testpaths = ["tests"]
-pythonpath = ["src"]
 
 [project.scripts]
-a-real-time-gen-ai-customer-service-bot = "a_real_time_gen_ai_customer_service_bot:main"
+a-real-time-gen-ai-customer-service-bot = "a_real_time_gen_ai_customer_service_bot.main:main"
 
 [build-system]
 requires = ["uv_build>=0.12.10,<0.13.0"]
@@ -28,5 +25,10 @@ build-backend = "uv_build"
 
 [dependency-groups]
 dev = [
-    "pytest>=9.1.1",
+    "pytest>=8.0",
+    "httpx>=0.24",
 ]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src", "tests"]

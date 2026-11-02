@@ -1,0 +1,93 @@
+business:
+  timezone: "Asia/Kolkata"
+  working_days: [mon, tue, wed, thu, fri]   # anything not listed is a weekend
+  hours:
+    start: "09:00"
+    end: "18:00"
+
+sla:
+  count_mode: "calendar"       # "calendar" (24h on working days) or "business_hours"
+  warning_ratio: 0.75          # warn when 75% of allowed time is consumed
+  response_minutes:            # allowed time per priority
+    critical: 240
+    high: 480
+    medium: 1440
+    low: 4320
+
+escalation:
+  repeated_negative_count: 3         # N consecutive negative messages
+  unresolved_negative_minutes: 15    # negative + unresolved for longer than this
+  high_risk_min_confidence: 0.5
+  high_risk_intents: [account_compromise, duplicate_payment, legal_threat]
+
+confidence:
+  sentiment_min: 0.50
+  language_min: 0.55
+  intent_min: 0.50
+
+languages:
+  default: "en"
+  supported: [en, hi, es, fr]        # English + 3 additional languages
+
+session:
+  timeout_minutes: 30
+  restore_hours: 24
+  context_messages: 10
+
+tickets:
+  mandatory_fields: [order_id, issue, contact]
+  duplicate_similarity: 0.6
+  known_products: [router, headphones, laptop, phone, charger, tablet, camera, watch]
+  priority_thresholds: {critical: 9, high: 6, medium: 3}
+
+routing:
+  max_workload: 5
+  skill_map:
+    account_compromise: security
+    duplicate_payment: billing
+    refund: billing
+    legal_threat: legal
+    technical_issue: technical
+    order_status: orders
+    general: general
+
+auth:
+  role_levels: {customer: 1, agent: 2, kb_manager: 2, admin: 3}   # public=0 is always readable
+  access_levels: {public: 0, customer: 1, internal: 2, restricted: 3}
+  permissions:
+    kb_update: [kb_manager, admin]
+    kb_rollback: [kb_manager, admin]
+    view_escalations: [agent, admin]
+
+rag:
+  top_k: 3
+  min_score: 0.35
+  clarification_margin: 0.90     # runner-up within this ratio of the best -> ask the customer
+  min_support_ratio: 0.60        # claim must share this fraction of content words with evidence
+
+multimodal:
+  processing_timeout_seconds: 30
+  file_retention_hours: 24
+  min_ocr_confidence: 0.60
+  min_text_chars: 15
+  max_file_mb: 10
+  allowed_extensions: [png, jpg, jpeg, pdf, txt]
+
+kb_pipeline:
+  update_time: "02:00"
+  retry_delays_minutes: [15, 30, 60]
+  maintenance_window:
+    start: "01:00"
+    end: "04:00"
+  health_check_minutes: 5
+  min_accuracy: 0.80
+  min_grounding: 0.90
+  max_accuracy_drop: 0.0
+  max_grounding_drop: 0.0
+
+monitoring:
+  window_minutes: 15
+  max_avg_latency_ms: 2000
+  min_avg_confidence: 0.50
+  max_failures: 5
+  max_escalations: 20

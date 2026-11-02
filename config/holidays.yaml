@@ -1,0 +1,7 @@
+# Dates on which the business is closed (no SLA time counts).
+# Replace the examples with your real holiday calendar.
+holidays:
+  - date: 2026-10-20
+    name: "Example holiday 1"
+  - date: 2026-11-08
+    name: "Example holiday 2"

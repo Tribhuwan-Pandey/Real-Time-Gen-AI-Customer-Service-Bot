@@ -102,10 +102,15 @@ class Retriever:
         n = len(chunks)
         idf = {t: math.log(1 + n / (1 + sum(1 for ct in chunk_terms if t in ct))) for t in q}
         total = sum(idf.values()) or 1.0
+        min_cov = self._config.get("rag.min_term_coverage")
+        optional = {stem(p.lower()) for p in self._config.get("tickets.known_products")}   # product names give context
         scored = []
         for c, ct, tt in zip(chunks, chunk_terms, title_terms):
             s = sum(idf[t] * (1.0 if t in ct else (0.6 if t in tt else 0.0)) for t in q) / total
-            if s > 0:
+            matched = [t for t in q if t in ct or t in tt]
+            needed = [t for t in q if t in matched or t not in optional]   # an unmatched product name is not held against it
+            coverage = len(matched) / len(needed) if needed else 0.0       # plain share of question words found
+            if s > 0 and coverage >= min_cov:
                 scored.append(Evidence(c, round(s, 3)))
         scored.sort(key=lambda e: (-e.score, e.chunk.doc.doc_id, e.chunk.index))
         floor = self._config.get("rag.min_score")

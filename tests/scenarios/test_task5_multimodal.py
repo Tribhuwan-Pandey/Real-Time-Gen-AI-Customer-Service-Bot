@@ -1,7 +1,6 @@
 """Task 5 scenarios: blurred images, mismatched invoices, delayed processing, expired files, prompt injection."""
 import logging
 import time
-from datetime import timedelta
 
 import pytest
 
@@ -115,7 +114,8 @@ def test_amount_normalisation():
                                  FixedOCR("lorem ipsum dolor sit amet nothing useful here", 0.9)])
 def test_blurred_or_unreadable_file_requests_another_file(config, store, ocr):
     r = service(config, store, ocr).process("c1", "blurry.png", PNG)
-    assert r.status == "needs_better_file" and r.fields is None or r.fields.is_empty()
+    assert r.status == "needs_better_file"
+    assert r.fields is None or r.fields.is_empty()           # nothing may be extracted from an unreadable file
 
 
 def test_quality_threshold_is_configurable(config, store):

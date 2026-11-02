@@ -97,7 +97,7 @@ def test_renamed_file_is_not_lost(env, clock):
     activate_initial(env, clock)
     (env.docs / "warranty-faq.md").rename(env.docs / "warranty-renamed.md")
     clock.set(IN_WINDOW() + timedelta(days=1))
-    r = env.run_update("kb_manager")
+    assert env.run_update("kb_manager").status == "activated"       # a rename is not a duplicate and loses nothing
     assert "warranty-renamed.md" in env.store.active.documents and "warranty-faq.md" not in env.store.active.documents
 
 
@@ -324,7 +324,7 @@ def test_scheduler_runs_once_per_day(sched, clock):
     clock.set(ist(13, 2, 0))
     sched.tick()
     clock.set(ist(13, 2, 30))
-    assert sched.tick() == [] or kinds(sched.tick()) == []
+    assert "update_ok" not in kinds(sched.tick())               # already updated today (a health event is fine)
     clock.set(ist(14, 2, 0))
     assert kinds(sched.tick()) == ["update_ok"]
 
@@ -439,3 +439,58 @@ def test_metrics_window_slides_with_time(config, clock):
     clock.advance(minutes=16)
     assert m.snapshot()["failures"]["count"] == 0
     assert m.snapshot(window_minutes=60)["failures"]["count"] == 1
+
+
+# --- monitoring of update failures, audited unauthorised access, smoke health check ------------------------
+def test_failed_updates_and_giving_up_are_counted_in_monitoring(env, clock, config):
+    s = UpdateScheduler(config, clock, env, metrics=env.metrics_)
+    break_source(env)
+    clock.set(ist(13, 2, 0))
+    s.tick()
+    for t in ((2, 15), (2, 45), (3, 45)):
+        clock.set(ist(13, *t))
+        s.tick()
+    by_kind = env.metrics_.snapshot(window_minutes=600)["failures"]["by_kind"]     # default window is 15 min
+    assert by_kind["kb_update_failed"] == 4 and by_kind["kb_update_gave_up"] == 1
+
+
+def test_unauthorised_attempts_are_logged_and_counted(env, caplog):
+    import logging
+    with caplog.at_level(logging.WARNING):
+        with pytest.raises(PermissionDenied):
+            env.run_update("customer")
+        with pytest.raises(PermissionDenied):
+            env.rollback(None)
+    assert env.metrics_.snapshot()["failures"]["by_kind"]["unauthorized_access"] == 2
+    assert "unauthorised 'kb_update'" in caplog.text and "unauthorised 'kb_rollback'" in caplog.text
+
+
+def test_unauthorised_attempts_can_raise_an_alert(env, config):
+    config.set("monitoring.max_failures", 2)
+    for _ in range(3):
+        with pytest.raises(PermissionDenied):
+            env.run_update("hacker")
+    assert "many_failures" in {a.name for a in env.metrics_.alerts()}
+
+
+def test_smoke_health_check_passes_on_a_good_kb_and_fails_on_empty_or_broken(tmp_path, config, clock, auth):
+    pipe = KBPipeline(config, clock, auth, VersionedStore(clock), tmp_path / "d", tmp_path / "q", EVAL)
+    assert pipe.smoke_health_check() is False                       # nothing live
+    shutil.copytree(SRC, tmp_path / "d")
+    clock.set(IN_WINDOW())
+    pipe.bootstrap("kb_manager")
+    assert pipe.smoke_health_check() is True
+    pipe._assistant_for = lambda docs: (_ for _ in ()).throw(ConnectionError("retriever down"))
+    with pytest.raises(ConnectionError):
+        pipe.smoke_health_check()                                   # an exception is treated as an outage by health_tick
+    pipe.health_check = pipe.smoke_health_check
+    assert pipe.health_tick().status in ("unhealthy_no_rollback", "rolled_back")
+
+
+def test_orchestrator_accepts_a_custom_health_check(tmp_path, config, clock):
+    from a_real_time_gen_ai_customer_service_bot.orchestrator import Orchestrator
+    shutil.copytree(SRC, tmp_path / "kb")
+    state = {"ok": True}
+    bot = Orchestrator(config, clock, kb_dir=tmp_path / "kb", workdir=tmp_path / "run", health_check=lambda: state["ok"])
+    state["ok"] = False
+    assert bot.pipeline.health_tick().status == "unhealthy_no_rollback"

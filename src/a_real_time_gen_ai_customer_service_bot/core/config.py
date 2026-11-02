@@ -11,6 +11,8 @@ DEFAULT_CONFIG_PATH = PROJECT_ROOT / "config" / "default.yaml"
 DEFAULT_HOLIDAYS_PATH = PROJECT_ROOT / "config" / "holidays.yaml"
 
 DAY_NAMES = {"mon", "tue", "wed", "thu", "fri", "sat", "sun"}
+# languages the detector has word lists for (adding one also needs i18n messages, tone and patterns: see the guide)
+KNOWN_LANGUAGES = {"en", "hi", "es", "fr", "de", "pt"}
 _MISSING = object()
 
 
@@ -90,8 +92,9 @@ def validate_config(data: dict) -> None:
     check("sla.warning_ratio", lambda v: _is_number(v) and 0 < v < 1,
           "must be between 0 and 1 (exclusive)")
     check("sla.response_minutes",
-          lambda v: isinstance(v, dict) and v and all(_positive(x) for x in v.values()),
-          "must be a non-empty mapping of priority -> positive minutes")
+          lambda v: isinstance(v, dict) and {"critical", "high", "medium", "low"} <= set(v)
+          and all(_positive(x) for x in v.values()),
+          "must define critical, high, medium AND low as positive minutes (a ticket can have any of them)")
 
     # escalation
     check("escalation.repeated_negative_count",
@@ -105,7 +108,8 @@ def validate_config(data: dict) -> None:
         check(f"confidence.{key}", _unit_interval, "must be between 0 and 1")
 
     # languages
-    check("languages.supported", _str_list, "must be a non-empty list of language codes")
+    check("languages.supported", lambda v: _str_list(v) and set(v) <= KNOWN_LANGUAGES,
+          f"must be a non-empty list of implemented language codes {sorted(KNOWN_LANGUAGES)}")
     try:
         if _lookup(data, "languages.default") not in _lookup(data, "languages.supported"):
             errors.append("languages.default must be one of languages.supported")
@@ -146,6 +150,7 @@ def validate_config(data: dict) -> None:
     check("rag.min_score", _unit_interval, "must be between 0 and 1")
     check("rag.clarification_margin", _unit_interval, "must be between 0 and 1")
     check("rag.min_support_ratio", _unit_interval, "must be between 0 and 1")
+    check("rag.min_term_coverage", _unit_interval, "must be between 0 and 1")
 
     # multimodal
     check("multimodal.processing_timeout_seconds", _positive, "must be positive")
@@ -154,6 +159,8 @@ def validate_config(data: dict) -> None:
     check("multimodal.min_text_chars", lambda v: isinstance(v, int) and v >= 0, "must be an integer >= 0")
     check("multimodal.max_file_mb", _positive, "must be positive")
     check("multimodal.allowed_extensions", _str_list, "must be a non-empty list")
+    for key in ("min_photo_sharpness", "min_photo_brightness", "max_photo_brightness", "min_photo_contrast", "min_photo_pixels"):
+        check(f"multimodal.{key}", lambda v: _is_number(v) and v >= 0, "must be a number >= 0")
 
     # KB pipeline
     check("kb_pipeline.update_time", _is_hhmm, "must be a quoted 'HH:MM' string")

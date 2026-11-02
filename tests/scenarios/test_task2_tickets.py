@@ -1,5 +1,5 @@
 """Task 2 scenarios: duplicates, unavailable teams, after-hours, runtime SLA changes."""
-from datetime import date, timedelta
+from datetime import date
 
 import pytest
 

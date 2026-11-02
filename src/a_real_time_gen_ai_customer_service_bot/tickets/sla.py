@@ -28,8 +28,19 @@ class SLAEngine:
     def __init__(self, config: Config, calendar: BusinessCalendar, clock: Clock, escalation: EscalationEngine):
         self._config, self._calendar, self._clock, self._escalation = config, calendar, clock, escalation
 
+    _TIERS = ("critical", "high", "medium", "low")
+
     def allowed_minutes(self, priority: str) -> float:
-        return self._config.get("sla.response_minutes")[priority]   # looked up on every call -> runtime changes apply
+        """Looked up on every call, so runtime changes apply. Validation requires all four tiers; the fallback
+        (nearest defined tier) only protects a config object that was built without validation."""
+        table = self._config.get("sla.response_minutes")
+        if priority in table:
+            return table[priority]
+        i = self._TIERS.index(priority) if priority in self._TIERS else len(self._TIERS) - 1
+        for tier in self._TIERS[i:] + self._TIERS[:i][::-1]:
+            if tier in table:
+                return table[tier]
+        return min(table.values())   # looked up on every call -> runtime changes apply
 
     def deadline(self, ticket: Ticket) -> datetime:
         return self._calendar.add_minutes(ticket.created_at, self.allowed_minutes(ticket.sla_priority or ticket.priority))

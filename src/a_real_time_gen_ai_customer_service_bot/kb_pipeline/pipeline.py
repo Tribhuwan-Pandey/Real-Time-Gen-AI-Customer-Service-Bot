@@ -11,7 +11,7 @@ import hashlib
 import json
 import shutil
 from dataclasses import dataclass, field
-from datetime import datetime, time, timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Callable
 from zoneinfo import ZoneInfo
@@ -96,6 +96,16 @@ class KBPipeline:
         self.watch: _Watch | None = None
         self.parse_calls = 0
         self._rejected_fingerprint: str | None = None
+
+    def _authorize(self, role: str | None, permission: str) -> None:
+        """Permission check that leaves an audit trail (log + metric) when access is denied."""
+        try:
+            self._auth.require(role, permission)
+        except PermissionDenied:
+            log.warning("unauthorised '%s' attempt by role=%s", permission, role)
+            if self.metrics:
+                self.metrics.record_failure("unauthorized_access")
+            raise
 
     # ---------------------------------------------------------------- time helpers
     def _local(self, dt: datetime) -> datetime:
@@ -218,7 +228,7 @@ class KBPipeline:
 
     # ---------------------------------------------------------------- update / activation
     def run_update(self, role: str | None) -> UpdateResult:
-        self._auth.require(role, "kb_update")            # raises PermissionDenied
+        self._authorize(role, "kb_update")               # raises PermissionDenied (and is audited)
         report = self.ingest()
         if not report.changed:
             return UpdateResult("no_changes", report, detail="no new or modified documents")
@@ -250,7 +260,7 @@ class KBPipeline:
     def bootstrap(self, role: str | None) -> UpdateResult:
         """First load of the knowledge base (nothing live yet, so there is nothing to disrupt: the
         maintenance window does not apply). The quality report is still produced and stored."""
-        self._auth.require(role, "kb_update")
+        self._authorize(role, "kb_update")
         if self.store.active is not None:
             raise RuntimeError("knowledge base already loaded; use run_update()")
         report = self.ingest()
@@ -276,8 +286,23 @@ class KBPipeline:
 
     # ---------------------------------------------------------------- health & rollback
     def _default_health_check(self) -> bool:
+        return self.smoke_health_check()
+
+    def smoke_health_check(self, sample_size: int = 5) -> bool:
+        """Is the LIVE knowledge base actually usable? It must contain documents and answer sample
+        questions without errors (an exception = outage) with at least one real answer."""
         active = self.store.active
-        return bool(active and active.documents)
+        if not active or not active.documents:
+            return False
+        sample = [c for c in self.eval_cases if not c.get("expect_refusal")][:sample_size]
+        if not sample:
+            return True
+        assistant = self._assistant_for(list(active.documents.values()))
+        answered = 0
+        for case in sample:
+            a = assistant.answer(case["question"], case.get("role", "customer"), case.get("region"))
+            answered += a.status == "answered"
+        return answered >= 1
 
     def health_tick(self) -> HealthResult:
         w = self.watch
@@ -311,5 +336,5 @@ class KBPipeline:
             return False
 
     def rollback(self, role: str | None) -> KBVersion:
-        self._auth.require(role, "kb_rollback")
+        self._authorize(role, "kb_rollback")
         return self.store.rollback()

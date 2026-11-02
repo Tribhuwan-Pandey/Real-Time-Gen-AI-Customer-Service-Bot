@@ -18,6 +18,7 @@ from ..core.logging import get_logger
 from ..core.masking import mask_text
 from ..core.security import detect_injection
 from .fields import Conflict, DocumentFields, compare_with_message, extract_document_fields
+from .imagequality import IMAGE_EXTENSIONS, assess_image
 from .ocr import OCREngine, OCRUnavailable
 from .storage import FileStore
 from .validator import validate_file
@@ -58,14 +59,17 @@ class MultimodalService:
 
     # --------------------------------------------------------------------------------------
     def process(self, customer_id: str, filename: str, data: bytes,
-                known_entities: dict[str, list[str]] | None = None) -> AttachmentResult:
+                known_entities: dict[str, list[str]] | None = None, photo_context: bool = False) -> AttachmentResult:
+        """photo_context=True means the customer is showing a product (damage, defect): a sharp, well-lit photo
+        with no readable text is then accepted as evidence instead of being rejected as 'unreadable'."""
         check = validate_file(filename, data, self._config)
         if not check.ok:
             log.warning("rejected upload from %s: %s", customer_id, check.reasons)
             return AttachmentResult("rejected", "unsafe_file", filename=_safe_name(filename),
                                     reasons=check.reasons, customer_id=customer_id)
         stored = self._store.save(customer_id, data, check.extension)
-        future = self._executor.submit(self._analyze, stored.file_id, filename, data, known_entities or {}, customer_id)
+        future = self._executor.submit(self._analyze, stored.file_id, filename, data, known_entities or {}, customer_id,
+                                       photo_context, check.extension)
         try:
             return future.result(timeout=self._config.get("multimodal.processing_timeout_seconds"))
         except FutureTimeout:
@@ -78,7 +82,8 @@ class MultimodalService:
             log.error("unexpected processing error: %s", type(exc).__name__)
             return AttachmentResult("failed", "processing_error", file_id=stored.file_id, customer_id=customer_id)
 
-    def _analyze(self, file_id: str, filename: str, data: bytes, known: dict, customer_id: str) -> AttachmentResult:
+    def _analyze(self, file_id: str, filename: str, data: bytes, known: dict, customer_id: str,
+                 photo_context: bool = False, extension: str = "") -> AttachmentResult:
         base = dict(file_id=file_id, filename=_safe_name(filename), customer_id=customer_id)
         try:
             ocr = self._ocr.extract(data, filename)
@@ -91,6 +96,13 @@ class MultimodalService:
             return AttachmentResult("rejected", "hidden_instructions", reasons=["instruction-like content in file"], **base)
         if (ocr.confidence < self._config.get("multimodal.min_ocr_confidence")
                 or len(text.strip()) < self._config.get("multimodal.min_text_chars")):
+            if photo_context and extension in IMAGE_EXTENSIONS and extract_document_fields(text, self._config).is_empty():
+                quality = assess_image(data)                   # a product photo: judge the picture, not the text
+                if quality is not None and not quality.problems(self._config):
+                    return AttachmentResult("processed", "product_photo", fields=DocumentFields(),
+                                            summary="product photo received (no text to read)", **base)
+                if quality is not None:
+                    return AttachmentResult("needs_better_file", "photo_quality", reasons=quality.problems(self._config), **base)
             return AttachmentResult("needs_better_file", "low_quality",
                                     reasons=[f"ocr confidence {ocr.confidence:.2f}"], **base)
         fields = extract_document_fields(text, self._config)
@@ -119,6 +131,9 @@ class MultimodalService:
             res.job_id = job.job_id
             out.append(res)
         return out
+
+    def shutdown(self) -> None:
+        self._executor.shutdown(wait=False, cancel_futures=False)
 
     def pending_jobs(self) -> int:
         return sum(1 for j in self._jobs if not j.notified)

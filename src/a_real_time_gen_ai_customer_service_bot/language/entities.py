@@ -4,7 +4,7 @@ Values are returned EXACTLY as written (never normalised) so names, order IDs,
 dates and product codes are preserved. Nothing is ever invented.
 """
 import re
-from datetime import date
+from datetime import date, timedelta
 
 from ..core.masking import _EMAIL, _PHONE_IN, _PHONE_INTL
 from ..core.text import fold
@@ -137,3 +137,81 @@ def find_dates(text: str) -> list[date]:
     """All parseable dates mentioned in text."""
     found = extract_entities(text)["dates"]
     return [d for d in (parse_date(x) for x in found) if d]
+
+
+# ---------------------------------------------------------------- time references (explicit, relative, month)
+from calendar import monthrange
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class TimeRef:
+    kind: str            # explicit | relative | month
+    start: date          # first day the reference can mean
+    end: date            # last day it can mean (== start for explicit / relative)
+    raw: str             # the exact text, so the caller can remove it from the search terms
+
+
+_NUM_WORDS = {"a": 1, "an": 1, "one": 1, "un": 1, "una": 1, "une": 1, "two": 2, "dos": 2, "deux": 2, "three": 3,
+              "tres": 3, "trois": 3, "four": 4, "five": 5, "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
+              "twelve": 12}
+_UNIT = {"day": "d", "days": "d", "dia": "d", "dias": "d", "jour": "d", "jours": "d",
+         "week": "w", "weeks": "w", "semana": "w", "semanas": "w", "semaine": "w", "semaines": "w",
+         "month": "m", "months": "m", "mes": "m", "meses": "m", "mois": "m",
+         "year": "y", "years": "y", "ano": "y", "anos": "y", "an": "y", "ans": "y"}
+_AGO = re.compile(
+    r"(?:\b(\d+|a|an|one|two|three|four|five|six|seven|eight|nine|ten|twelve)\s+(day|days|week|weeks|month|months|year|years)\s+ago\b"
+    r"|\bhace\s+(\d+|un|una|dos|tres)\s+(dia|dias|semana|semanas|mes|meses|ano|anos)\b"
+    r"|\bil y a\s+(\d+|un|une|deux|trois)\s+(jour|jours|semaine|semaines|mois|an|ans)\b)", re.I)
+_LAST = re.compile(
+    r"\b(last|previous) (week|month|year)\b|\b(?:la semana|el mes|el ano) pasad[oa]\b|"
+    r"\b(?:la semaine|le mois|l.annee) derniere\b|\b(?:le mois|la semaine) dernier\b|\bl.an dernier\b", re.I)
+_YESTERDAY = re.compile(r"\b(?:yesterday|ayer|hier)\b", re.I)
+_MONTH_YEAR = re.compile(rf"\b({_MONTH_ALT})\.?,?\s+(?:de\s+)?(\d{{4}})\b", re.I)
+
+
+def _minus(d: date, n: int, unit: str) -> date:
+    if unit == "d":
+        return d - timedelta(days=n)
+    if unit == "w":
+        return d - timedelta(weeks=n)
+    months = n if unit == "m" else 12 * n
+    y, m = divmod(d.year * 12 + d.month - 1 - months, 12)
+    return date(y, m + 1, min(d.day, monthrange(y, m + 1)[1]))
+
+
+def find_time_references(text: str, today: date) -> list[TimeRef]:
+    """Dates the customer refers to: explicit dates first, else relative ('last year', '6 months ago'),
+    else a whole month ('March 2026'). Only ONE kind is returned (the most precise one found)."""
+    from datetime import timedelta  # noqa: F401  (kept local for clarity)
+    text = text or ""
+    explicit = []
+    for raw in extract_entities(text)["dates"]:
+        d = parse_date(raw)
+        if d:
+            explicit.append(TimeRef("explicit", d, d, raw))
+    if explicit:
+        return explicit
+    folded = fold(text).replace("\u2019", "'")
+    rel: list[TimeRef] = []
+    if m := _YESTERDAY.search(folded):
+        rel.append(TimeRef("relative", today - timedelta(days=1), today - timedelta(days=1), m.group(0)))
+    for m in _AGO.finditer(folded):
+        num, unit = [g for g in m.groups() if g][:2]
+        n = int(num) if num.isdigit() else _NUM_WORDS.get(num.lower(), 1)
+        d = _minus(today, n, _UNIT[unit.lower()])
+        rel.append(TimeRef("relative", d, d, m.group(0)))
+    for m in _LAST.finditer(folded):
+        unit_word = (m.group(2) or m.group(0)).lower()
+        unit = "w" if "week" in unit_word or "semana" in unit_word or "semaine" in unit_word else \
+               "m" if "month" in unit_word or "mes" in unit_word or "mois" in unit_word else "y"
+        d = _minus(today, 1, unit)
+        rel.append(TimeRef("relative", d, d, m.group(0)))
+    if rel:
+        return rel
+    months = []
+    for m in _MONTH_YEAR.finditer(folded):
+        mon, year = _MONTHS.get(fold(m.group(1))), int(m.group(2))
+        if mon:
+            months.append(TimeRef("month", date(year, mon, 1), date(year, mon, monthrange(year, mon)[1]), m.group(0)))
+    return months

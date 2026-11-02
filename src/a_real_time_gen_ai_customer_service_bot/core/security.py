@@ -22,15 +22,27 @@ _PATTERNS: dict[str, str] = {
 _COMPILED = {name: re.compile(pat, re.IGNORECASE | re.MULTILINE) for name, pat in _PATTERNS.items()}
 _SENTENCE_SPLIT = re.compile(r"(?<=[.!?\u0964])\s+|\n+")
 
-REMOVED_MARK = "[removed: instruction-like content]"
+REMOVED_MARK = "[removed: instruction-like content]."     # ends with "." so it stays a separate sentence
+
+
+# OCR and attackers swap letters: "1gn0re prev1ous 1nstruct10ns", Cyrillic "о" for Latin "o". Test every variant.
+_DELEET = str.maketrans({"0": "o", "1": "i", "3": "e", "4": "a", "5": "s", "7": "t", "@": "a", "$": "s", "|": "l", "!": "i"})
+_LOOKALIKES = str.maketrans({"а": "a", "е": "e", "о": "o", "р": "p", "с": "c", "х": "x", "і": "i", "ѕ": "s", "ԁ": "d",
+                             "ο": "o", "ι": "i", "ν": "v", "α": "a", "ε": "e"})
+
+
+def _variants(text: str) -> list[str]:
+    folded = fold(text)
+    plain = folded.translate(_LOOKALIKES)
+    return [folded, plain, plain.translate(_DELEET)]
 
 
 def detect_injection(text: str) -> list[str]:
     """Names of injection patterns found in text (empty list = nothing suspicious)."""
     if not text:
         return []
-    folded = fold(text)
-    return [name for name, rx in _COMPILED.items() if rx.search(folded) or rx.search(text)]
+    variants = _variants(text) + [text]
+    return [name for name, rx in _COMPILED.items() if any(rx.search(v) for v in variants)]
 
 
 def sanitize_untrusted(text: str) -> tuple[str, list[str]]:

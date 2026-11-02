@@ -28,7 +28,33 @@ class PlainTextOCR:
         return OCRResult(data.decode("utf-8", errors="replace"), 1.0)
 
 
+def _entity_count(text: str) -> int:
+    from ..language.entities import extract_entities
+    e = extract_entities(text)
+    return sum(len(e[k]) for k in ("order_ids", "dates", "amounts", "error_codes", "product_codes"))
+
+
 class TesseractOCR:
+    """Two passes (as-is and cleaned up: grey, 2x upscale, median filter, autocontrast, threshold); the pass that
+    extracts MORE identifiers wins (ties: the untouched raw pass, because cleaning can truncate digits). Cleaning helps some photos and hurts others, so
+    neither is trusted blindly. Unreadable results keep their low confidence and the customer is asked for a new file."""
+
+    def _run(self, pytesseract, img) -> OCRResult:
+        info = pytesseract.image_to_data(img, output_type=pytesseract.Output.DICT)
+        words = [(w, float(c)) for w, c in zip(info["text"], info["conf"]) if w.strip() and float(c) >= 0]
+        if not words:
+            return OCRResult("", 0.0)
+        return OCRResult(" ".join(w for w, _ in words), sum(c for _, c in words) / len(words) / 100)
+
+    @staticmethod
+    def _clean(img):
+        from PIL import ImageFilter, ImageOps
+        g = img.convert("L")
+        if g.width < 1400:
+            g = g.resize((g.width * 2, g.height * 2))
+        g = ImageOps.autocontrast(g.filter(ImageFilter.MedianFilter(3)), cutoff=2)
+        return g.point(lambda v: 255 if v > 150 else 0)
+
     def extract(self, data: bytes, filename: str) -> OCRResult:
         try:
             import pytesseract
@@ -37,13 +63,13 @@ class TesseractOCR:
             raise OCRUnavailable("pillow/pytesseract not installed") from exc
         try:
             img = Image.open(io.BytesIO(data))
-            info = pytesseract.image_to_data(img, output_type=pytesseract.Output.DICT)
+            img.load()
+            raw = self._run(pytesseract, img)
+            cleaned = self._run(pytesseract, self._clean(img))
         except Exception as exc:                       # tesseract binary missing, corrupt image, ...
             raise OCRUnavailable(f"image OCR failed: {type(exc).__name__}") from exc
-        words = [(w, float(c)) for w, c in zip(info["text"], info["conf"]) if w.strip() and float(c) >= 0]
-        if not words:
-            return OCRResult("", 0.0)
-        return OCRResult(" ".join(w for w, _ in words), sum(c for _, c in words) / len(words) / 100)
+        # the cleaned pass must find strictly MORE identifiers to win; on a tie the untouched image is trusted
+        return cleaned if _entity_count(cleaned.text) > _entity_count(raw.text) else raw
 
 
 class PdfTextOCR:
@@ -56,7 +82,22 @@ class PdfTextOCR:
             text = "\n".join((p.extract_text() or "") for p in PdfReader(io.BytesIO(data)).pages)
         except Exception as exc:
             raise OCRUnavailable(f"PDF read failed: {type(exc).__name__}") from exc
-        return OCRResult(text, 1.0 if len(text.strip()) > 20 else 0.0)
+        if len(text.strip()) > 20:
+            return OCRResult(text, 1.0)
+        # image-only (scanned) PDF: OCR the embedded page images
+        parts: list[OCRResult] = []
+        try:
+            reader = PdfReader(io.BytesIO(data))
+            for page in reader.pages[:5]:
+                for image in page.images[:3]:
+                    parts.append(TesseractOCR().extract(image.data, image.name or "page.png"))
+        except OCRUnavailable:
+            raise
+        except Exception:
+            return OCRResult(text, 0.0)
+        if not parts:
+            return OCRResult(text, 0.0)
+        return OCRResult("\n".join(p.text for p in parts), sum(p.confidence for p in parts) / len(parts))
 
 
 class DefaultOCR:

@@ -8,7 +8,7 @@ import re
 from dataclasses import dataclass, field
 
 from ..core.config import Config
-from ..core.text import fold, tokens
+from ..core.text import tokens
 from .entities import extract_entities
 
 _WORDS: dict[str, str] = {

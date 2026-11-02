@@ -37,9 +37,30 @@ session expiry, file purge, scheduled KB update, health check / auto-rollback, a
 * **Conflicting regional policies**: latest effective date wins; if the region is unknown and variants exist, the bot asks for the region.
 * **Roles** come from server-side API keys, never from the request body.
 
+## Added in the hardening pass
+* **Follow-ups use context**: `conv.last_question` lets "and in India?" or "what about the refund after a return?" continue the previous knowledge question; a follow-up with no new content asks which one is meant.
+* **Unanswerable questions can become tickets**: the bot offers ("Would you like me to open a ticket?"); a yes (any supported language) creates the ticket with the original question as the issue and asks only for what is missing.
+* **Time references**: explicit dates, relative dates ("last year", "6 months ago", "hace dos meses") and whole months. If the policy changed inside the month the bot asks for the exact day. Historical answers start with "As of YYYY-MM-DD:".
+* **Answerability rule**: besides the idf score, the evidence must contain a minimum share of the question's content words (`rag.min_term_coverage`), so "free delivery" is not answered with shipping times.
+* **Dates in invoices**: only dates the customer wrote next to purchase/payment words are compared with the invoice.
+* **Late OCR results** are merged into the conversation and any open ticket (as evidence) and delivered through notifications.
+* **Product photos** with no text are accepted as evidence only when the customer is showing damage/defect and the picture passes sharpness/brightness/contrast/size checks.
+* **Persistence** (`state.py`): tickets, escalations, pending notifications and a masked summary + non-sensitive entities per returning customer are saved to one JSON file (atomic write, mode 0600).
+* **Audit**: denied KB and ticket actions are logged and counted (`unauthorized_access`); failed and abandoned KB updates are counted too.
+
+## Added by the full-project audit
+* **High-risk intents** use two layers: extra regexes and an order-independent *concept* layer (something of mine + an unauthorised/unknown marker; a money word + a "twice" marker; a legal word + a future-intent marker), evaluated per sentence and per pair of adjacent sentences. Exclusions (how-to questions, hypotheticals, relatives/third parties, "twice as much", "lawyer-approved") apply to both layers.
+* **Typo correction is deliberately conservative** (cutoff 0.88, protected words) because a wrong correction can create or destroy an escalation.
+* **Concurrency**: one re-entrant lock around shared state; released while a slow upload is read.
+* **Retention** covers files left by a previous run; **memory** is bounded (metrics, message history, input length).
+
 ## Known limitations
-* State (sessions, tickets, escalations, KB versions) is **in memory**: a restart loses it. Session restore works within one running process. A database layer would be the next step.
-* Sentiment, language and intent detection are **lexicon/rule based** (offline, explainable, testable). They will miss unseen slang or sarcasm; an LLM/embedding classifier could be plugged in behind the same interfaces.
-* Retrieval is **lexical** (+ a small es/fr/hi glossary). KB documents are English; answers quote the English KB text.
-* Product *photos*: only text visible in an image is read (OCR); no visual object recognition. Scanned PDFs are not OCR'd (the bot asks for an image/other file).
-* `generator=` accepts an LLM, whose output is verified against evidence (tested with fake generators only; no real LLM was called).
+* The **knowledge-base version history, metrics windows and uploaded files are not persisted** (the KB is re-ingested from `data/kb_docs` on start).
+* Sentiment, language and intent detection are **rule based**. They are explainable and testable but will miss unseen slang, new sarcasm styles and further languages. A classifier can be placed behind the same interfaces.
+* Retrieval is **lexical** (+ phrase normalisation and a small es/fr/hi glossary). KB documents are English; answers quote the English text. Embeddings would be the next step.
+* **No real LLM call was made.** The `OpenAIGenerator` is wired and its safety behaviour (untrusted wrapping, claim verification, outage fallback) is tested with a fake client only.
+* The bot does **not recognise objects or damage in photos**; it only checks photo quality and keeps the photo as evidence. Very noisy phone photos are usually unreadable, and then the customer is asked for a clearer file (values are never guessed).
+* Duplicate-ticket detection compares words; paraphrases or other languages of the same complaint may become separate (grouped or ungrouped) tickets.
+* The scheduler and background checks need something to call them (the API does, every minute).
+* High-risk detection by rules alone generalises to roughly 70-90% of unseen phrasings; enable the optional LLM second opinion for more.
+* `customer_id` is trusted from the caller (put an authenticated gateway in front); there is no rate limiting.

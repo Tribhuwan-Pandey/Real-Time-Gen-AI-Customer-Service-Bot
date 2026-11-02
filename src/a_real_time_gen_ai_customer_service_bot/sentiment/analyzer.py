@@ -50,14 +50,52 @@ _POSITIVE = _rx(
 _SARCASM_STRONG = _rx(
     r"\bthanks for nothing\b", r"\byeah,? right\b", r"\boh,? (?:great|wonderful|brilliant|fantastic|perfect)\b",
     r"\bjust (?:great|perfect|wonderful|what i needed)\b", r"\bgreat,? (?:another|more|just)\b",
-    r"\b(?:real|so|very) helpful\b[^.\n]{0,25}\b(?:not|never|nothing)\b", r"\blove (?:how|waiting|being)\b",
+    r"\b(?:real|really|so|very) helpful\b[^.\n]{0,45}\b(?:not|never|nothing)\b", r"\blove (?:how|waiting|being)\b",
     r"\bwhat a (?:surprise|shock|joke)\b", r"\bnice (?:job|work|going)\b[^.\n]{0,30}\b(?:breaking|losing|ignoring)\b",
     r"\bgracias por nada\b", r"\b(?:que bien|genial|perfecto),? (?:otra vez|de nuevo)\b",
     r"\bmerci pour rien\b", r"\bsuper,? (?:encore|bravo)\b",
-    r"\bwaah\b[^.\n]{0,30}\b(?:phir|nahi|again)\b", r"\bbahut badhiya\b[^.\n]{0,20}\b(?:phir|nahi)\b")
+    r"\bwaah\b[^.\n]{0,30}\b(?:phir|nahi|again)\b", r"\bbahut badhiya\b[^.\n]{0,20}\b(?:phir|nahi)\b",
+    r"\byeah,? (?:because|right|sure)\b", r"\b(?:totally|perfectly|completely|so) normal\b",
+    r"\bnot like i (?:need|care|mind|have)\b", r"\bcan.t wait to wait\b",
+    r"\bgood luck (?:getting|trying|finding|with|reaching)\b", r"\bwhat a great way to\b",
+    r"\bthanks a lot for (?:keeping|making|leaving|ignoring)\b")
 _SARCASM_POS_NEG = _rx(
     r"\b(?:great|wonderful|fantastic|amazing|perfect|brilliant|lovely|thanks a lot|thank you so much|excellent|awesome|love)\b"
     r"[^.\n]{0,50}\b(?:again|another|nothing|late|delay\w*|broken|still|waiting|weeks|days|never|wrong|lost|not working|broke|crashed|ignored|fail\w*)\b")
+def _dev(*words: str) -> str:
+    return "|".join(fold(w) for w in words)
+
+
+# Praise wording (any language). On its own it is positive; next to a negative situation it is sarcasm.
+_PRAISE = _rx(
+    r"\b(?:thanks|thank you|thx|great|wonderful|fantastic|amazing|perfect|brilliant|excellent|lovely|awesome|nice|glad|love|"
+    r"bravo|congratulations|congrats|kudos|well done|good job|so helpful|really helpful|very helpful|impressive|superb|"
+    r"fabulous|terrific|wow)\b",
+    r"\b(?:gracias|excelente|perfecto|genial|maravilla|maravilloso|fantastico|estupendo|felicidades|que bien)\b",
+    r"\b(?:merci|super|formidable|parfait|magnifique|quel service)\b",
+    r"\b(?:shukriya|dhanyavad|waah|wah|badhiya|shandar|zabardast|mast|kamaal|bahut accha|bahut acha)\b",
+    _dev("वाह", "शानदार", "बढ़िया", "धन्यवाद", "शुक्रिया", "कमाल", "जबरदस्त"))
+# Unambiguous negative situations (weak words like "again"/"another"/"still" are deliberately NOT here:
+# "I'll order another one" must not become sarcasm).
+_NEG_SITUATION = _rx(
+    r"\b(?:waste|wasting|wasted|on hold|lost|lose|loses|losing|crash|crashed|crashes|break|breaking|broke|broken|died|dead|"
+    r"late|delay|delayed|nobody|no one|impossible|flicker\w*|ignor\w*|ruin\w*|forever|worse|only took|attempts|useless|rude)\b",
+    r"\b(?:(?:been|still|am|i.m|keep|kept) waiting|waited (?:for )?(?:\d+|a|an|two|three|four|five|six|seven|eight|nine|ten|weeks?|days?|hours?|months?)|"
+    r"waiting (?:for )?(?:\d+|a|an|two|three|four|five|six|seven|eight|nine|ten|weeks?|days?|hours?|months?|ages|forever))\b",
+    r"\b(?:(?:paying|paid|charged|billed|pay|charge)\s+(?:me\s+)?twice|twice for the same|double.charged)\b",
+    r"\b(?:retraso|esperando|espera|perdido|perdio|roto|cobraron|tarde|dos semanas)\b",
+    r"\b(?:retard|casse|perdu|jamais|rien|attendre)\b",
+    r"\b(?:der|nahi aaya|nahi mila|kuch nahi|abhi tak|kharab|phir se der)\b",
+    _dev("देरी", "फिर से", "नहीं आया", "खराब", "अभी तक", "कुछ नहीं"))
+# Real good news: suppresses the praise+problem sarcasm rule ("thanks, it works now").
+_RESOLUTION = _rx(
+    r"\b(?:solved|fixed|resolved|works|worked|working now|sorted|arrived quickly|quick refund|quickly|perfectly|on time|"
+    r"refund arrived|problem is gone|replaced|finally|faster|as fast|for free|free of charge|early|"
+    r"(?:is|was|are|been|has been) (?:over|gone)|no longer)\b",
+    r"\b(?:resuelto|funciona|llego perfecto|llego rapido)\b", r"\b(?:resolu|fonctionne|tout est parfait|arrive vite)\b",
+    r"\b(?:aa gaya|mil gaya|theek ho gaya|sahi ho gaya)\b", _dev("ठीक हो गया", "मिल गया", "आ गया"))
+_NEGATION = re.compile(r"\b(?:not|no|never|without|isn.t|wasn.t|aren.t|weren.t|didn.t|hasn.t|haven.t|nahi|sin|pas)\b(?:\s+\w+){0,2}", re.I)
+_SARCASM_EMOJI = re.compile("[\U0001f644\U0001f612\U0001f611\U0001f643\U0001f974]")
 _NEG_EVENT = _rx(r"\b(?:again|another|nothing|late|delay\w*|broken|still waiting|weeks|never|lost|ignored)\b")
 
 
@@ -97,7 +135,6 @@ class SentimentAnalyzer:
         if raw.count("!") >= 2 or raw.count("?") >= 3:
             frus += 0.15
             signals.append("emphatic_punctuation")
-        letters = [c for c in raw if c.isalpha()]
         words = re.findall(r"[A-Za-z]{3,}", raw)
         if len(words) >= 3 and sum(1 for w in words if w.isupper()) / len(words) > 0.6:
             frus += 0.3
@@ -106,12 +143,22 @@ class SentimentAnalyzer:
             frus += 0.2
 
         sarcasm = 0.0
+        # "not late", "no delay", "never broken" describe the ABSENCE of a problem: remove them before testing
+        affirmed = _NEGATION.sub(" ", norm)
+        praise, negsit, resolved = bool(_PRAISE.search(norm)), bool(_NEG_SITUATION.search(affirmed)), bool(_RESOLUTION.search(norm))
+        recent_complaints = len(history) >= 2 and all(h.negative_like for h in history[-2:])
         if _SARCASM_STRONG.search(norm):
             sarcasm = 0.8
             signals.append("sarcasm_pattern")
-        elif _SARCASM_POS_NEG.search(norm) or (count(_POSITIVE) and _NEG_EVENT.search(norm)):
+        elif _SARCASM_EMOJI.search(raw) and (praise or negsit):
+            sarcasm = 0.75
+            signals.append("sarcasm_emoji")
+        elif praise and negsit and not resolved:
+            sarcasm = 0.65
+            signals.append("praise_next_to_problem")
+        elif praise and not resolved and recent_complaints:
             sarcasm = 0.6
-            signals.append("positive_wording_negative_context")
+            signals.append("praise_after_repeated_complaints")
         if sarcasm and history and history[-1].negative_like:
             sarcasm += 0.1
             signals.append("prior_negative_context")

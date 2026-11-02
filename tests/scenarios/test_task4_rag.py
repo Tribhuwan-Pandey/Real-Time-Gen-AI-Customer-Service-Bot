@@ -164,7 +164,7 @@ def test_ambiguous_question_asks_for_clarification(config, clock, auth, kb_docs)
     config.set("rag.clarification_margin", 0.5)
     index = KnowledgeIndex(kb_docs)
     a = KnowledgeAssistant(Retriever(lambda: index, auth, config), config, clock).answer(
-        "Tell me about warranty and shipping days", "customer", "EU")
+        "How many days is it?", "customer", "EU")
     assert a.status == "clarification" and len(a.clarification_options) >= 2
 
 

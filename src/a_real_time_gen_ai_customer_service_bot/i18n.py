@@ -2,6 +2,8 @@
 
 T = {
     "en": {
+        "refused_offer": "I couldn't find this in our knowledge base, so I can't answer it reliably. Would you like me to open a ticket so an agent can follow up? (yes/no)",
+        "offer_declined": "No problem. Let me know if there is anything else I can help with.",
         "greeting": "Hello! How can I help you today?",
         "thanks": "You're welcome! Is there anything else I can help with?",
         "resolved": "Glad it's sorted! Is there anything else I can help with?",
@@ -36,6 +38,8 @@ T = {
                    "evidence": "a screenshot or invoice"},
     },
     "hi": {
+        "refused_offer": "यह जानकारी हमारे ज्ञान-आधार में नहीं मिली, इसलिए मैं भरोसेमंद उत्तर नहीं दे सकता। क्या मैं एजेंट के फ़ॉलो-अप के लिए टिकट खोल दूँ? (हाँ/नहीं)",
+        "offer_declined": "ठीक है। कुछ और मदद चाहिए तो बताइए।",
         "greeting": "नमस्ते! मैं आपकी कैसे मदद कर सकता हूँ?",
         "thanks": "आपका स्वागत है! क्या मैं और कुछ मदद कर सकता हूँ?",
         "resolved": "खुशी हुई कि समस्या हल हो गई! क्या कुछ और मदद चाहिए?",
@@ -69,6 +73,8 @@ T = {
                    "contact": "ईमेल या फ़ोन नंबर", "product": "उत्पाद", "customer_name": "आपका नाम", "evidence": "स्क्रीनशॉट या बिल"},
     },
     "es": {
+        "refused_offer": "No encontré esto en nuestra base de conocimiento, así que no puedo responder con fiabilidad. ¿Desea que abra un ticket para que un agente le contacte? (sí/no)",
+        "offer_declined": "De acuerdo. Avíseme si necesita algo más.",
         "greeting": "¡Hola! ¿En qué puedo ayudarle hoy?",
         "thanks": "¡De nada! ¿Puedo ayudarle con algo más?",
         "resolved": "¡Me alegra que se haya resuelto! ¿Puedo ayudarle con algo más?",
@@ -102,6 +108,8 @@ T = {
                    "contact": "un correo o teléfono", "product": "el producto", "customer_name": "su nombre", "evidence": "una captura o factura"},
     },
     "fr": {
+        "refused_offer": "Je n'ai pas trouvé cela dans notre base de connaissances, je ne peux donc pas répondre de façon fiable. Souhaitez-vous que j'ouvre un ticket pour qu'un agent vous recontacte ? (oui/non)",
+        "offer_declined": "D'accord. Dites-moi si je peux aider autrement.",
         "greeting": "Bonjour ! Comment puis-je vous aider ?",
         "thanks": "Avec plaisir ! Puis-je vous aider pour autre chose ?",
         "resolved": "Ravi que ce soit réglé ! Puis-je vous aider pour autre chose ?",

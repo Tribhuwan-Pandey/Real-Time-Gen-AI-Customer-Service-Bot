@@ -72,3 +72,25 @@ def test_unsafe_attachment_is_rejected_via_api(client):
 def test_input_validation(client):
     assert client.post("/chat", json={"customer_id": "", "message": "x"}).status_code == 422
     assert client.post("/chat", json={"customer_id": "c", "message": "x" * 5000}).status_code == 422
+
+
+def _make_ticket(client):
+    client.post("/chat", json={"customer_id": "c1", "message": "Charged twice, card 4111 1111 1111 1111, ORD-123456, mail jane@example.com"})
+
+
+def test_ticket_and_handoff_endpoints(client):
+    _make_ticket(client)
+    assert client.get("/tickets").status_code == 403
+    agent = {"X-API-Key": "agent-key"}
+    listing = client.get("/tickets", headers=agent).json()["tickets"]
+    assert len(listing) == 1 and listing[0]["issue_type"] == "duplicate_payment" and listing[0]["sla"]["status"] == "ok"
+    tid = listing[0]["id"]
+    assert "4111" not in str(listing)
+    one = client.get(f"/tickets/{tid}", headers=agent).json()
+    assert one["priority"] in ("high", "critical") and one["sla"]["deadline"]
+    handoff = client.get(f"/tickets/{tid}/handoff", headers=agent).json()["handoff_summary"]
+    assert "ORD-123456" in handoff and "4111 1111" not in handoff and "jane@example.com" not in handoff
+    assert client.get(f"/tickets/{tid}/handoff").status_code == 403
+    assert client.get("/tickets/TCK-9999", headers=agent).status_code == 404
+    assert client.post(f"/tickets/{tid}/resolve", headers=agent).json()["status"] == "resolved"
+    assert client.get("/tickets?status=open", headers=agent).json()["tickets"] == []

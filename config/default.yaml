@@ -58,12 +58,15 @@ auth:
     kb_update: [kb_manager, admin]
     kb_rollback: [kb_manager, admin]
     view_escalations: [agent, admin]
+    view_tickets: [agent, admin]
+    manage_tickets: [agent, admin]
 
 rag:
   top_k: 3
   min_score: 0.35
   clarification_margin: 0.90     # runner-up within this ratio of the best -> ask the customer
   min_support_ratio: 0.60        # claim must share this fraction of content words with evidence
+  min_term_coverage: 0.60        # share of the question's content words the evidence must contain
 
 multimodal:
   processing_timeout_seconds: 30
@@ -72,6 +75,11 @@ multimodal:
   min_text_chars: 15
   max_file_mb: 10
   allowed_extensions: [png, jpg, jpeg, pdf, txt]
+  min_photo_sharpness: 50        # product photos only (edge-variance measure)
+  min_photo_brightness: 40
+  max_photo_brightness: 245
+  min_photo_contrast: 15
+  min_photo_pixels: 100          # shortest side
 
 kb_pipeline:
   update_time: "02:00"

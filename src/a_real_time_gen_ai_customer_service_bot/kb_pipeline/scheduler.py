@@ -24,8 +24,9 @@ class SchedulerEvent:
 
 
 class UpdateScheduler:
-    def __init__(self, config: Config, clock: Clock, pipeline: KBPipeline, role: str = "kb_manager"):
+    def __init__(self, config: Config, clock: Clock, pipeline: KBPipeline, role: str = "kb_manager", metrics=None):
         self._config, self._clock, self._pipeline, self._role = config, clock, pipeline, role
+        self._metrics = metrics
         self._anchor = clock.now()           # next run is the first update_time AFTER this moment
         self._attempt = 0
         self.retry_at: datetime | None = None
@@ -68,6 +69,8 @@ class UpdateScheduler:
 
     def _on_failure(self, now: datetime, detail: str) -> None:
         self._log("update_failed", detail)
+        if self._metrics:
+            self._metrics.record_failure("kb_update_failed")
         delays = self._config.get("kb_pipeline.retry_delays_minutes")
         if self._attempt < len(delays):
             self.retry_at = now + timedelta(minutes=delays[self._attempt])
@@ -75,6 +78,8 @@ class UpdateScheduler:
             self._attempt += 1
         else:
             self._log("gave_up", f"all {len(delays)} retries failed; waiting for next scheduled run")
+            if self._metrics:
+                self._metrics.record_failure("kb_update_gave_up")
             self._finish(now)
 
     def _finish(self, now: datetime) -> None:

@@ -11,6 +11,7 @@ admin actions is then enforced by AuthorizationService, not by the client.
 import asyncio
 import base64
 import binascii
+import hmac
 import json
 import os
 import sys
@@ -50,7 +51,22 @@ def load_key_table() -> dict[str, str]:
 
 
 def resolve_role(api_key: str | None, key_table: dict[str, str]) -> str:
-    return key_table.get(api_key or "", "customer")
+    """Constant-time comparison against every configured key (no early exit that leaks which prefix matched)."""
+    role = "customer"
+    candidate = (api_key or "").encode()
+    for known, known_role in key_table.items():
+        if hmac.compare_digest(candidate, known.encode()):
+            role = known_role
+    return role
+
+
+def load_env_file(path: str | None = None) -> bool:
+    """Read a .env file (BOT_API_KEYS, BOT_STATE_FILE, OPENAI_API_KEY ...) if python-dotenv is installed."""
+    try:
+        from dotenv import load_dotenv
+    except ImportError:
+        return False
+    return bool(load_dotenv(path))
 
 
 def reply_to_json(r: BotReply) -> dict:
@@ -70,10 +86,38 @@ def reply_to_json(r: BotReply) -> dict:
     }
 
 
+def ticket_to_json(bot: Orchestrator, t) -> dict:
+    from .core.masking import mask_text
+    return {
+        "id": t.ticket_id, "customer_id": mask_text(t.customer_id), "order_id": t.order_id, "product": t.product,
+        "issue": mask_text(t.issue), "issue_type": t.issue_type, "priority": t.priority,
+        "priority_score": t.priority_score, "priority_breakdown": t.priority_breakdown, "status": t.status,
+        "assigned_agent": t.assigned_agent, "queue": t.queue, "group_id": t.group_id,
+        "duplicate_count": t.duplicate_count, "created_at": t.created_at.isoformat(),
+        "sla": {"deadline": bot.sla.deadline(t).isoformat(), "status": bot.sla.status(t),
+                "tier": t.sla_priority or t.priority, "warned": t.sla_warned, "breached": t.sla_breached},
+    }
+
+
 def create_app(orchestrator: Orchestrator | None = None, key_table: dict[str, str] | None = None,
-               background_interval_seconds: float | None = 60.0) -> FastAPI:
-    bot = orchestrator or Orchestrator()
+               background_interval_seconds: float | None = 60.0, state_path: str | None = None) -> FastAPI:
+    from .rag.llm import generator_from_env
+    from .language.llm_risk import risk_classifier_from_env
+    bot = orchestrator or Orchestrator(generator=generator_from_env(), risk_classifier=risk_classifier_from_env())
     keys = key_table if key_table is not None else load_key_table()
+    state_file = state_path if state_path is not None else os.environ.get("BOT_STATE_FILE")
+    if state_file:
+        restored = bot.load_state(state_file)
+        if restored:
+            log.info("state restored: %s", restored)
+
+    def persist():
+        if state_file:
+            try:
+                bot.save_state(state_file)
+            except Exception:
+                log.error("saving state failed", exc_info=True)
+                bot.metrics.record_failure("state_save_failed")
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -83,7 +127,8 @@ def create_app(orchestrator: Orchestrator | None = None, key_table: dict[str, st
                 while True:
                     await asyncio.sleep(background_interval_seconds)
                     try:
-                        bot.run_background_checks()
+                        await asyncio.to_thread(bot.run_background_checks)       # never block the event loop
+                        await asyncio.to_thread(persist)
                     except Exception:
                         log.error("background checks failed", exc_info=True)
                         bot.metrics.record_failure("background_checks")
@@ -91,6 +136,8 @@ def create_app(orchestrator: Orchestrator | None = None, key_table: dict[str, st
         yield
         if task:
             task.cancel()
+        persist()                                           # final save on shutdown
+        bot.close()
 
     app = FastAPI(title="Customer Service Bot", lifespan=lifespan)
     app.state.bot = bot
@@ -125,6 +172,37 @@ def create_app(orchestrator: Orchestrator | None = None, key_table: dict[str, st
                 "escalations": [{"id": e.id, "rule": e.rule, "reason": e.reason, "queue": e.queue,
                                  "timestamp": e.timestamp.isoformat(), "summary": e.summary} for e in bot.escalation.records]}
 
+    def _guard(role: str, fn, *a):
+        try:
+            return fn(role, *a)
+        except PermissionDenied:
+            raise HTTPException(403, "not allowed") from None
+
+    @app.get("/tickets")
+    def tickets(status: str | None = None, x_api_key: str | None = Header(default=None)):
+        found = _guard(resolve_role(x_api_key, keys), bot.list_tickets, status)
+        return {"tickets": [ticket_to_json(bot, t) for t in found]}
+
+    @app.get("/tickets/{ticket_id}")
+    def ticket(ticket_id: str, x_api_key: str | None = Header(default=None)):
+        t = _guard(resolve_role(x_api_key, keys), bot.get_ticket, ticket_id)
+        if t is None:
+            raise HTTPException(404, "ticket not found")
+        return ticket_to_json(bot, t)
+
+    @app.get("/tickets/{ticket_id}/handoff")
+    def handoff(ticket_id: str, x_api_key: str | None = Header(default=None)):
+        text = _guard(resolve_role(x_api_key, keys), bot.ticket_handoff, ticket_id)
+        if text is None:
+            raise HTTPException(404, "ticket not found")
+        return {"ticket_id": ticket_id, "handoff_summary": text}
+
+    @app.post("/tickets/{ticket_id}/resolve")
+    def resolve(ticket_id: str, x_api_key: str | None = Header(default=None)):
+        if not _guard(resolve_role(x_api_key, keys), bot.resolve_ticket, ticket_id):
+            raise HTTPException(404, "ticket not found")
+        return {"ticket_id": ticket_id, "status": "resolved"}
+
     @app.post("/admin/kb/update")
     def kb_update(x_api_key: str | None = Header(default=None)):
         try:
@@ -147,6 +225,7 @@ def create_app(orchestrator: Orchestrator | None = None, key_table: dict[str, st
 
 
 def run_cli() -> None:
+    load_env_file()
     bot = Orchestrator()
     print("Customer service bot (type 'quit' to exit). Role: customer. Prefix a message with 'agent:' or 'admin:' to simulate a role in this local demo.")
     customer = input("Customer id: ").strip() or "cli-customer"
@@ -171,6 +250,7 @@ def main() -> None:
         run_cli()
         return
     import uvicorn
+    load_env_file()
     uvicorn.run(create_app(), host=os.environ.get("BOT_HOST", "127.0.0.1"), port=int(os.environ.get("BOT_PORT", "8000")))
 
 

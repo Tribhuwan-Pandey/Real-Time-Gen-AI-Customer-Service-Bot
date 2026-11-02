@@ -1,6 +1,5 @@
 """Ticket service: create tickets from unresolved conversations (Task 2)."""
 from dataclasses import dataclass, field
-from datetime import datetime
 
 from ..core.business_calendar import BusinessCalendar
 from ..core.clock import Clock
@@ -67,7 +66,6 @@ class TicketService:
                     dup.evidence.append(e)
             return TicketResult("duplicate", dup, related=[r.ticket_id for r in related])
 
-        risk = bool(draft.risk_intents)
         severity = SEVERITY.get(draft.issue_type, 1)
         impact = impact_level(draft.impact_text)
         ticket = Ticket(

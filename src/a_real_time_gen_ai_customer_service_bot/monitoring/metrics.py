@@ -21,8 +21,14 @@ class MetricsCollector:
         self._events: list[tuple[datetime, str, str, float]] = []
 
     # -- recording
+    MAX_EVENTS = 20000
+
     def _add(self, kind: str, key: str = "", value: float = 1.0) -> None:
         self._events.append((self._clock.now(), kind, key, float(value)))
+        if len(self._events) > self.MAX_EVENTS:                 # a long-running process must not leak memory
+            keep_minutes = max(self._config.get("monitoring.window_minutes") * 4, 24 * 60)
+            cutoff = self._clock.now() - timedelta(minutes=keep_minutes)
+            self._events = [e for e in self._events if e[0] >= cutoff][-self.MAX_EVENTS // 2:]
 
     def record_latency(self, name: str, ms: float) -> None:
         self._add("latency", name, ms)

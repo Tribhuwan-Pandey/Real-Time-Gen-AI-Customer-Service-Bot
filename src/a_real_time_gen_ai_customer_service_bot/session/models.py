@@ -32,6 +32,8 @@ class Conversation:
     last_intents: list[str] = field(default_factory=list)
     attachments: list[dict[str, Any]] = field(default_factory=list)
     corrections: list[str] = field(default_factory=list)
+    last_question: str | None = None                              # last knowledge question (for follow-ups)
+    purchase_dates: list[str] = field(default_factory=list)      # dates the customer tied to an order / payment
     ticket_ids: list[str] = field(default_factory=list)
     summary: str | None = None
     ended_at: datetime | None = None

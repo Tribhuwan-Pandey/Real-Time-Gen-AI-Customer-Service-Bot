@@ -1,4 +1,3 @@
-from datetime import timedelta
 
 import pytest
 
@@ -70,7 +69,7 @@ def test_empty_message_is_neutral(analyzer):
 
 
 def test_low_confidence_flag_follows_config(analyzer, config):
-    r = analyzer.analyze("It is broken")
+    assert not analyzer.analyze("It is broken").low_confidence          # confident enough at the default threshold
     config.set("confidence.sentiment_min", 0.99)
     assert analyzer.analyze("It is broken").low_confidence
 

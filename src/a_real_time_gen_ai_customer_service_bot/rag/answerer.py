@@ -17,7 +17,8 @@ from ..core.clock import Clock
 from ..core.config import Config
 from ..core.logging import get_logger
 from ..core.security import REMOVED_MARK, sanitize_untrusted
-from ..language.entities import extract_entities, find_dates
+from ..core.text import fold
+from ..language.entities import find_time_references
 from .models import Evidence
 from .query import content_tokens, query_terms, sentences, stem
 from .retriever import Retriever
@@ -87,21 +88,36 @@ class KnowledgeAssistant:
             return Answer("refused", "I can't help with that request.", "no_usable_question",
                           security_findings=findings)
 
-        # date handling: current vs historical question
-        dates = sorted(set(find_dates(clean_q)))
-        as_of, mode = today, "current"
-        if len(dates) > 1:
-            return Answer("clarification", "Which date should I check the policy for?", "multiple_dates",
-                          security_findings=findings)
-        if dates:
-            if dates[0] > today:
+        # date handling: current vs historical question (explicit date, relative date, or whole month)
+        refs = find_time_references(clean_q, today)
+        as_of, mode, month_end = today, "current", None
+        if refs:
+            starts = {r.start for r in refs}
+            if len(starts) > 1:
+                return Answer("clarification", "Which date should I check the policy for?", "multiple_dates",
+                              security_findings=findings)
+            ref = refs[0]
+            if ref.start > today:
                 return Answer("refused", "I can only answer about policies that are in effect now or were "
-                              "in effect on a past date.", "future_date", as_of=dates[0], security_findings=findings)
-            as_of, mode = dates[0], ("historical" if dates[0] < today else "current")
-        for raw_date in extract_entities(clean_q)["dates"]:         # dates select the policy; they are not search terms
-            clean_q = clean_q.replace(raw_date, " ")
+                              "in effect on a past date.", "future_date", as_of=ref.start, security_findings=findings)
+            if ref.kind == "month":
+                month_end = min(ref.end, today)
+                as_of = ref.start if ref.start <= today else today
+                mode = "historical" if month_end < today else "current"
+            else:
+                as_of, mode = ref.start, ("historical" if ref.start < today else "current")
+            folded_q = fold(clean_q)
+            for r in refs:                                       # the date selects the policy; it is not a search term
+                folded_q = folded_q.replace(fold(r.raw), " ")
+            clean_q = folded_q
 
         result = self._retriever.retrieve(clean_q, role, region, as_of)
+        if month_end is not None and month_end != as_of and result.evidence:
+            later = self._retriever.retrieve(clean_q, role, region, month_end)
+            key = lambda r: (r.evidence[0].chunk.doc.doc_id, r.evidence[0].chunk.doc.version) if r.evidence else None
+            if key(later) != key(result):                        # the policy changed inside that month
+                return Answer("clarification", "The policy changed during that month. Which exact date do you mean?",
+                              "date_ambiguous", as_of=as_of, mode=mode, security_findings=findings)
         if result.evidence and result.evidence[0].chunk.doc.policy_key in result.needs_region:
             return Answer("clarification", "This policy differs by region. Which region applies to you?",
                           "region_ambiguous", clarification_options=result.needs_region[result.evidence[0].chunk.doc.policy_key], as_of=as_of,
@@ -126,9 +142,13 @@ class KnowledgeAssistant:
         grounding, bad = verify_claims(text, evidence, self._config.get("rag.min_support_ratio"))
         generator_rejected: list[str] = []
         if self._generator is not None:
-            candidate = self._generator(clean_q, evidence)
-            g2, bad2 = verify_claims(candidate, evidence, self._config.get("rag.min_support_ratio"))
-            if bad2 or not _CITATION.search(candidate):
+            try:
+                candidate = self._generator(clean_q, evidence)
+                g2, bad2 = verify_claims(candidate, evidence, self._config.get("rag.min_support_ratio"))
+            except Exception as exc:                             # LLM outage / timeout: fall back to the safe answer
+                log.error("generator failed: %s", type(exc).__name__)
+                candidate, g2, bad2 = None, 0.0, ["generator error"]
+            if bad2 or candidate is None or not _CITATION.search(candidate):
                 generator_rejected = bad2 or ["missing citation"]
                 log.warning("generator output rejected: %d unsupported claim(s)", len(generator_rejected))
             else:
@@ -140,6 +160,8 @@ class KnowledgeAssistant:
         cites = [{"doc_id": e.chunk.doc.doc_id, "version": e.chunk.doc.version, "title": e.chunk.doc.title,
                   "effective_date": e.chunk.doc.effective_date.isoformat(), "region": e.chunk.doc.region}
                  for e in evidence[:1]]
+        if mode == "historical":
+            text = f"As of {as_of.isoformat()}: {text}"
         return Answer("answered", text, citations=cites, grounding=grounding, as_of=as_of, mode=mode,
                       unsupported_claims=generator_rejected, security_findings=findings)
 

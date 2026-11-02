@@ -109,6 +109,7 @@ def test_ambiguous_followup_after_context_still_asks(bot):
 def test_corrected_information_replaces_old_value(bot):
     bot.handle_message("c1", "My router is broken, order ORD-111111, mail a@b.com")
     r = bot.handle_message("c1", "Sorry, I meant order ORD-222222")
+    assert "order_ids" in r.text                                   # the customer is told what was updated
     conv = bot.sessions.get_active("c1")
     assert conv.entities["order_ids"] == ["ORD-222222"] and "order_ids" in conv.corrections
 
@@ -232,3 +233,108 @@ def test_chat_records_latency_confidence_and_escalations(bot):
     bot.handle_message("c1", "I was charged twice")
     s = bot.metrics.snapshot()
     assert s["latency"]["count"] == 1 and s["confidence"]["count"] >= 1 and s["escalations"]["count"] == 1
+
+
+# --- unresolved knowledge questions become tickets; agent access to tickets ----------------------------------
+def test_unanswerable_question_offers_a_ticket_and_creates_it_on_yes(bot):
+    r = bot.handle_message("c1", "What is the maximum speed of the moon rover?", region="EU")
+    assert r.answer.status == "refused" and "open a ticket" in r.text and r.ticket is None
+    r2 = bot.handle_message("c1", "yes please, my order is ORD-445566 and my email is jane@example.com")
+    assert r2.ticket is not None and "moon rover" in r2.ticket.issue and r2.ticket.order_id == "ORD-445566"
+
+
+def test_yes_without_details_asks_for_missing_info_and_keeps_the_original_question(bot):
+    bot.handle_message("c1", "What is the maximum speed of the moon rover?", region="EU")
+    r = bot.handle_message("c1", "yes")
+    assert r.ticket is None and "still need" in r.text
+    r2 = bot.handle_message("c1", "ORD-998877 and bob@example.com")
+    assert r2.ticket and "moon rover" in r2.ticket.issue
+
+
+def test_declining_the_ticket_offer_creates_nothing(bot):
+    bot.handle_message("c1", "What is the maximum speed of the moon rover?", region="EU")
+    r = bot.handle_message("c1", "no thanks")
+    assert r.ticket is None and "No problem" in r.text and bot.sessions.get_active("c1").pending is None
+    assert len(bot.repo.tickets) == 0
+
+
+def test_ignoring_the_offer_clears_it(bot):
+    bot.handle_message("c1", "What is the maximum speed of the moon rover?", region="EU")
+    bot.handle_message("c1", "How many days to return products?", region="EU")
+    assert bot.sessions.get_active("c1").pending is None
+
+
+def test_offer_is_understood_in_other_languages(bot):
+    bot.handle_message("c2", "What is the maximum speed of the moon rover?", region="EU")
+    r = bot.handle_message("c2", "oui, commande ORD-123456 et mon email est a@b.com")
+    assert r.ticket is not None
+
+
+def test_agents_can_read_tickets_and_masked_handoff_but_customers_cannot(bot):
+    from a_real_time_gen_ai_customer_service_bot.core.auth import PermissionDenied
+    r = bot.handle_message("c1", "Charged twice on card 4111 1111 1111 1111, ORD-123456, mail jane@example.com phone 9876543210")
+    tid = r.ticket.ticket_id
+    assert [t.ticket_id for t in bot.list_tickets("agent")] == [tid]
+    text = bot.ticket_handoff("agent", tid)
+    assert "ORD-123456" in text and "4111 1111" not in text and "jane@example.com" not in text and "9876543210" not in text
+    for call in (lambda: bot.list_tickets("customer"), lambda: bot.ticket_handoff(None, tid), lambda: bot.resolve_ticket("customer", tid)):
+        with pytest.raises(PermissionDenied):
+            call()
+    assert bot.metrics.snapshot()["failures"]["by_kind"]["unauthorized_access"] == 3
+    assert bot.resolve_ticket("agent", tid) and bot.get_ticket("agent", tid).status == "resolved"
+    assert bot.ticket_handoff("agent", "TCK-9999") is None
+
+
+# --- date comparison, late background results, product photos ---------------------------------------------------
+def test_unrelated_date_in_the_message_does_not_conflict_with_the_invoice(tmp_path, config, clock):
+    bot = bot_with_ocr(tmp_path, config, clock, OcrStub("INVOICE Order ORD-777888 Total Rs 1,500 Date 2026-10-05"))
+    r = bot.handle_message("c1", "Since 2026-09-01 my router is slow, see the invoice", attachments=[("invoice.png", PNG)])
+    assert r.attachments[0].status == "processed"
+
+
+def test_purchase_date_that_disagrees_with_the_invoice_asks_for_clarification(tmp_path, config, clock):
+    bot = bot_with_ocr(tmp_path, config, clock, OcrStub("INVOICE Order ORD-777888 Total Rs 1,500 Date 2026-10-05"))
+    r = bot.handle_message("c1", "I bought it on 2026-09-01, see the invoice", attachments=[("invoice.png", PNG)])
+    assert r.attachments[0].status == "needs_clarification" and r.attachments[0].conflicts[0].field == "dates"
+
+
+def test_late_background_result_joins_the_conversation_and_the_ticket(tmp_path, config, clock):
+    import time
+    from a_real_time_gen_ai_customer_service_bot.multimodal.ocr import OCRResult
+
+    class SlowOcr:
+        def extract(self, data, filename):
+            time.sleep(0.3)
+            return OCRResult("INVOICE Order ORD-777888 Total Rs 1,500 Date 2026-10-05 Error E1002", 0.95)
+
+    config.set("multimodal.processing_timeout_seconds", 0.05)
+    bot = bot_with_ocr(tmp_path, config, clock, SlowOcr())
+    r = bot.handle_message("c1", "My router stopped working, order ORD-777888, mail jane@example.com",
+                           attachments=[("invoice.png", PNG)])
+    assert r.attachments[0].status == "queued" and "queued" in r.text and r.ticket is not None
+    assert not any("invoice.png" in e for e in r.ticket.evidence)
+    time.sleep(0.5)
+    bot.run_background_checks()
+    note = bot.pop_notifications("c1")
+    assert len(note) == 1 and "ORD-777888" in note[0]
+    assert any("invoice.png" in e and "E1002" in e for e in r.ticket.evidence)            # evidence added to the open ticket
+    assert "E1002" in bot.sessions.get_active("c1").entities["error_codes"]
+    assert bot.pop_notifications("c1") == []
+
+
+def test_product_photo_is_evidence_for_a_damage_complaint(tmp_path, config, clock):
+    Image = pytest.importorskip("PIL.Image")
+    import io
+    from PIL import ImageDraw
+    img = Image.new("RGB", (800, 600), (200, 180, 150))
+    d = ImageDraw.Draw(img)
+    d.rectangle((160, 120, 640, 480), fill=(60, 70, 90), outline=(0, 0, 0), width=6)
+    d.ellipse((300, 200, 500, 400), fill=(220, 60, 50))
+    d.line((160, 120, 640, 480), fill=(255, 255, 255), width=5)
+    buf = io.BytesIO()
+    img.save(buf, "PNG")
+    bot = bot_with_ocr(tmp_path, config, clock, OcrStub("", 0.0))
+    r = bot.handle_message("c1", "My router arrived damaged, photo attached. ORD-777888 jane@example.com",
+                           attachments=[("damage.png", buf.getvalue())])
+    assert r.attachments[0].status == "processed" and r.attachments[0].reason == "product_photo"
+    assert r.ticket is not None and any("product photo" in e for e in r.ticket.evidence)
